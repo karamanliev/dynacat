@@ -1092,16 +1092,16 @@ function setupTruncatedElementTitles() {
     }
 }
 
-async function changeTheme(key, onChanged) {
+async function changeTheme(key) {
     const themeStyleElem = find("#theme-style");
 
-    const response = await fetch(`${pageData.baseURL}/api/set-theme/${key}`, {
+    const response = await fetch(`${pageData.baseURL}/api/set-theme/${encodeURIComponent(key)}`, {
         method: "POST",
     });
 
     if (response.status != 200) {
         alert("Failed to set theme: " + response.statusText);
-        return;
+        return false;
     }
     const newThemeStyle = await response.text();
 
@@ -1112,60 +1112,257 @@ async function changeTheme(key, onChanged) {
     themeStyleElem.html(newThemeStyle);
     document.documentElement.setAttribute("data-theme", key);
     document.documentElement.setAttribute("data-scheme", response.headers.get("X-Scheme"));
-    typeof onChanged == "function" && onChanged();
     setTimeout(() => { tempStyle.remove(); }, 10);
+
+    return true;
 }
 
+const themeModeManual = "manual";
+const themeModeSystem = "system";
+const themeSchemeLight = "light";
+const themeSchemeDark = "dark";
+const themeCookieDuration = 2 * 365 * 24 * 60 * 60 * 1000;
+
+const themeCookieNames = {
+    mode: "theme-mode",
+    manual: "theme-manual",
+    light: "theme-light",
+    dark: "theme-dark",
+};
+
 function initThemePicker() {
-    const themeChoicesInMobileNav = find(".mobile-navigation .theme-choices");
-    if (!themeChoicesInMobileNav) return;
+    if (!find(".theme-picker-popover-content")) return;
 
-    const themeChoicesInHeader = find(".header-container .theme-choices");
-
-    if (themeChoicesInHeader) {
-        themeChoicesInHeader.replaceWith(
-            themeChoicesInMobileNav.cloneNode(true)
-        );
-    }
-
-    const presetElems = findAll(".theme-choices .theme-preset");
-    let themePreviewElems = document.getElementsByClassName("current-theme-preview");
+    const presetElems = findAll(".theme-picker-popover-content .theme-preset");
+    const presetElemsByKey = new Map();
+    const themePreviewElems = document.getElementsByClassName("current-theme-preview");
+    const themeModeToggleElems = findAll("[data-theme-mode-toggle]");
+    const themeColorMetaElem = document.querySelector('meta[name="theme-color"]');
+    const themeCookiePath = pageData.baseURL ? `${pageData.baseURL}/` : "/";
+    const systemThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const themeState = {
+        activeKey: pageData.theme,
+        mode: pageData.themeMode,
+        manualKey: pageData.themeManual,
+        lightKey: pageData.themeLight,
+        darkKey: pageData.themeDark,
+    };
     let isLoading = false;
 
     presetElems.forEach((presetElement) => {
         const themeKey = presetElement.dataset.key;
-
-        if (themeKey === undefined) {
+        if (!themeKey || presetElemsByKey.has(themeKey)) {
             return;
         }
 
-        if (themeKey == pageData.theme) {
-            presetElement.classList.add("current");
+        presetElemsByKey.set(themeKey, presetElement);
+    });
+
+    const getSystemThemeScheme = () => systemThemeQuery.matches ? themeSchemeDark : themeSchemeLight;
+    const getCurrentThemeScheme = () => document.documentElement.getAttribute("data-scheme") == themeSchemeLight ? themeSchemeLight : themeSchemeDark;
+    const getThemeKeyForScheme = (scheme, state = themeState) => scheme == themeSchemeLight ? state.lightKey : state.darkKey;
+    const setThemeKeyForScheme = (state, scheme, themeKey) => {
+        if (scheme == themeSchemeLight) {
+            state.lightKey = themeKey;
+            return;
+        }
+
+        state.darkKey = themeKey;
+    };
+
+    const getPreviewElem = (themeKey) => {
+        if (!themeKey) {
+            return null;
+        }
+
+        return presetElemsByKey.get(themeKey) || null;
+    };
+
+    const syncPageThemeState = () => {
+        pageData.theme = themeState.activeKey;
+        pageData.themeMode = themeState.mode;
+        pageData.themeManual = themeState.manualKey;
+        pageData.themeLight = themeState.lightKey;
+        pageData.themeDark = themeState.darkKey;
+    };
+
+    const writeThemeCookie = (name, value) => {
+        const expires = new Date(Date.now() + themeCookieDuration).toUTCString();
+        document.cookie = `${name}=${encodeURIComponent(value)}; expires=${expires}; path=${themeCookiePath}; SameSite=Lax`;
+    };
+
+    const persistThemeState = () => {
+        writeThemeCookie(themeCookieNames.mode, themeState.mode);
+        writeThemeCookie(themeCookieNames.manual, themeState.manualKey);
+        writeThemeCookie(themeCookieNames.light, themeState.lightKey);
+        writeThemeCookie(themeCookieNames.dark, themeState.darkKey);
+    };
+
+    const syncCurrentThemePreview = () => {
+        const previewSource = getPreviewElem(themeState.activeKey);
+        if (!previewSource) {
+            return;
+        }
+
+        Array.from(themePreviewElems).forEach((previewContainer) => {
+            const previewElem = previewSource.cloneNode(true);
+            previewElem.classList.remove("current");
+
+            const currentPreview = previewContainer.querySelector(".theme-preset");
+
+            if (currentPreview) {
+                currentPreview.replaceWith(previewElem);
+                return;
+            }
+
+            previewContainer.append(previewElem);
+        });
+    };
+
+    const syncThemeMeta = () => {
+        const previewElem = getPreviewElem(themeState.activeKey);
+        const backgroundColor = previewElem?.dataset.backgroundColor;
+
+        if (themeColorMetaElem && backgroundColor) {
+            themeColorMetaElem.setAttribute("content", backgroundColor);
+        }
+    };
+
+    const syncThemePickerUI = () => {
+        const isSystemMode = themeState.mode == themeModeSystem;
+        document.documentElement.setAttribute("data-theme-mode", themeState.mode);
+
+        themeModeToggleElems.forEach((toggleElem) => {
+            toggleElem.classList.toggle("current", isSystemMode);
+            toggleElem.setAttribute("aria-pressed", isSystemMode ? "true" : "false");
+
+            const stateElem = toggleElem.querySelector(".theme-mode-toggle-state");
+            if (stateElem) {
+                stateElem.innerText = isSystemMode ? "On" : "Off";
+            }
+        });
+
+        presetElems.forEach((presetElement) => {
+            const themeKey = presetElement.dataset.key;
+            const isCurrent = isSystemMode
+                ? themeKey == themeState.lightKey || themeKey == themeState.darkKey
+                : themeKey == themeState.manualKey;
+
+            presetElement.classList.toggle("current", isCurrent);
+        });
+
+        syncCurrentThemePreview();
+        syncThemeMeta();
+        syncPageThemeState();
+    };
+
+    const applyThemeState = async (nextThemeState, activeThemeKey) => {
+        if (isLoading) {
+            return false;
+        }
+
+        if (activeThemeKey != themeState.activeKey) {
+            isLoading = true;
+            const didChangeTheme = await changeTheme(activeThemeKey);
+            isLoading = false;
+
+            if (!didChangeTheme) {
+                return false;
+            }
+        }
+
+        Object.assign(themeState, nextThemeState, { activeKey: activeThemeKey });
+        persistThemeState();
+        syncThemePickerUI();
+        return true;
+    };
+
+    const toggleThemeMode = async () => {
+        const nextThemeState = { ...themeState };
+
+        if (themeState.mode == themeModeSystem) {
+            nextThemeState.mode = themeModeManual;
+            nextThemeState.manualKey = themeState.activeKey;
+            await applyThemeState(nextThemeState, themeState.activeKey);
+            return;
+        }
+
+        nextThemeState.mode = themeModeSystem;
+        setThemeKeyForScheme(nextThemeState, getCurrentThemeScheme(), themeState.activeKey);
+
+        await applyThemeState(nextThemeState, getThemeKeyForScheme(getSystemThemeScheme(), nextThemeState));
+    };
+
+    const selectTheme = async (themeKey, themeScheme) => {
+        const nextThemeState = { ...themeState };
+
+        if (themeState.mode == themeModeSystem) {
+            if (getThemeKeyForScheme(themeScheme) == themeKey) {
+                return;
+            }
+
+            setThemeKeyForScheme(nextThemeState, themeScheme, themeKey);
+
+            await applyThemeState(nextThemeState, getThemeKeyForScheme(getSystemThemeScheme(), nextThemeState));
+            return;
+        }
+
+        if (themeState.manualKey == themeKey) {
+            return;
+        }
+
+        nextThemeState.manualKey = themeKey;
+        setThemeKeyForScheme(nextThemeState, themeScheme, themeKey);
+
+        await applyThemeState(nextThemeState, themeKey);
+    };
+
+    const syncThemeWithSystemPreference = async () => {
+        if (themeState.mode != themeModeSystem || isLoading) {
+            return;
+        }
+
+        await applyThemeState({ ...themeState }, getThemeKeyForScheme(getSystemThemeScheme()));
+    };
+
+    presetElems.forEach((presetElement) => {
+        const themeKey = presetElement.dataset.key;
+        const themeScheme = presetElement.dataset.scheme;
+
+        if (themeKey === undefined || themeScheme === undefined) {
+            return;
         }
 
         presetElement.addEventListener("click", () => {
-            if (themeKey == pageData.theme) return;
-            if (isLoading) return;
+            if (isLoading) {
+                return;
+            }
 
-            isLoading = true;
-            changeTheme(themeKey, function() {
-                isLoading = false;
-                pageData.theme = themeKey;
-                presetElems.forEach((e) => { e.classList.remove("current"); });
-
-                Array.from(themePreviewElems).forEach((preview) => {
-                    preview.querySelector(".theme-preset").replaceWith(
-                        presetElement.cloneNode(true)
-                    );
-                })
-
-                presetElems.forEach((e) => {
-                    if (e.dataset.key != themeKey) return;
-                    e.classList.add("current");
-                });
-            });
+            selectTheme(themeKey, themeScheme);
         });
-    })
+    });
+
+    themeModeToggleElems.forEach((toggleElem) => {
+        toggleElem.addEventListener("click", () => {
+            if (isLoading) {
+                return;
+            }
+
+            toggleThemeMode();
+        });
+    });
+
+    if (typeof systemThemeQuery.addEventListener == "function") {
+        systemThemeQuery.addEventListener("change", syncThemeWithSystemPreference);
+    } else if (typeof systemThemeQuery.addListener == "function") {
+        systemThemeQuery.addListener(syncThemeWithSystemPreference);
+    }
+
+    syncThemePickerUI();
+
+    if (themeState.mode == themeModeSystem) {
+        syncThemeWithSystemPreference();
+    }
 }
 
 async function setupPage() {

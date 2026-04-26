@@ -78,12 +78,12 @@ type application struct {
 
 func newApplication(c *config) (*application, error) {
 	app := &application{
-		Version:        buildVersion,
-		CreatedAt:      time.Now(),
-		Config:         *c,
-		slugToPage:     make(map[string]*page),
-		widgetByID:     make(map[uint64]widget),
-		widgetToPage:   make(map[uint64]*page),
+		Version:          buildVersion,
+		CreatedAt:        time.Now(),
+		Config:           *c,
+		slugToPage:       make(map[string]*page),
+		widgetByID:       make(map[uint64]widget),
+		widgetToPage:     make(map[uint64]*page),
 		sseClients:       make(map[*sseClient]struct{}),
 		imageProxyURLs:   make(map[string]imageProxyInfo),
 		todoListIDToPage: make(map[string]*page),
@@ -520,7 +520,13 @@ func (a *application) resolveUserDefinedAssetPath(path string) string {
 }
 
 type templateRequestData struct {
-	Theme *themeProperties
+	Theme          *themeProperties
+	LightTheme     *themeProperties
+	DarkTheme      *themeProperties
+	ThemeMode      string
+	ManualThemeKey string
+	LightThemeKey  string
+	DarkThemeKey   string
 }
 
 type templateData struct {
@@ -533,19 +539,28 @@ type templateData struct {
 }
 
 func (a *application) populateTemplateRequestData(data *templateRequestData, r *http.Request) {
-	theme := &a.Config.Theme.themeProperties
-
+	themeState := a.newThemeSelectionState()
 	if !a.Config.Theme.DisablePicker {
-		selectedTheme, err := r.Cookie("theme")
-		if err == nil {
-			preset, exists := a.Config.Theme.Presets.Get(selectedTheme.Value)
-			if exists {
-				theme = preset
-			}
-		}
+		themeState = a.getThemeSelectionState(r)
 	}
 
-	data.Theme = theme
+	lightTheme, ok := a.getThemeByKey(themeState.LightKey)
+	if !ok {
+		lightTheme = themeState.ActiveTheme
+	}
+
+	darkTheme, ok := a.getThemeByKey(themeState.DarkKey)
+	if !ok {
+		darkTheme = themeState.ActiveTheme
+	}
+
+	data.Theme = themeState.ActiveTheme
+	data.LightTheme = lightTheme
+	data.DarkTheme = darkTheme
+	data.ThemeMode = themeState.Mode
+	data.ManualThemeKey = themeState.ManualKey
+	data.LightThemeKey = themeState.LightKey
+	data.DarkThemeKey = themeState.DarkKey
 }
 
 func (a *application) getAccessiblePages(user *authenticatedUser) []*page {
