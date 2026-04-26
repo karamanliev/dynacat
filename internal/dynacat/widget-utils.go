@@ -98,6 +98,38 @@ func decodeJsonFromRequestTask[T any](client requestDoer) func(*http.Request) (T
 	}
 }
 
+func decodeTextFromRequest(client requestDoer, request *http.Request) (string, error) {
+	response, err := client.Do(request)
+	if err != nil {
+		return "", err
+	}
+	defer response.Body.Close()
+
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return "", err
+	}
+
+	if response.StatusCode != http.StatusOK {
+		truncatedBody, _ := limitStringLength(string(body), 256)
+
+		return "", fmt.Errorf(
+			"unexpected status code %d from %s, response: %s",
+			response.StatusCode,
+			request.URL,
+			truncatedBody,
+		)
+	}
+
+	return string(body), nil
+}
+
+func decodeTextFromRequestTask(client requestDoer) func(*http.Request) (string, error) {
+	return func(request *http.Request) (string, error) {
+		return decodeTextFromRequest(client, request)
+	}
+}
+
 // TODO: tidy up, these are a copy of the above but with a line changed
 func decodeXmlFromRequest[T any](client requestDoer, request *http.Request) (T, error) {
 	var result T
