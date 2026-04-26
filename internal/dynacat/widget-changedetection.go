@@ -106,7 +106,7 @@ func (widget *changeDetectionWidget) fetchLatestHistory(client *http.Client) {
 		}
 
 		truncated, _ := limitStringLength(responses[i], 2000)
-		widget.ChangeDetections[i].LatestHistory = truncated
+		widget.ChangeDetections[i].LatestHistory = strings.ReplaceAll(truncated, "\n", "<br>")
 	}
 }
 
