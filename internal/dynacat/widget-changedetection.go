@@ -22,6 +22,7 @@ type changeDetectionWidget struct {
 	Token            string                   `yaml:"token"`
 	Limit            int                      `yaml:"limit"`
 	CollapseAfter    int                      `yaml:"collapse-after"`
+	LastHistoryTooltip bool                   `yaml:"last-history-tooltip"`
 }
 
 func (widget *changeDetectionWidget) initialize() error {
@@ -71,6 +72,42 @@ func (widget *changeDetectionWidget) update(ctx context.Context) {
 	}
 
 	widget.ChangeDetections = watches
+
+	if widget.LastHistoryTooltip && len(widget.ChangeDetections) > 0 {
+		widget.fetchLatestHistory(client)
+	}
+}
+
+func (widget *changeDetectionWidget) fetchLatestHistory(client *http.Client) {
+	watches := widget.ChangeDetections
+	requests := make([]*http.Request, len(watches))
+
+	for i := range watches {
+		request, _ := http.NewRequest("GET", fmt.Sprintf("%s/api/v1/watch/%s/history/latest", widget.InstanceURL, watches[i].UUID), nil)
+
+		if widget.Token != "" {
+			request.Header.Add("x-api-key", string(widget.Token))
+		}
+
+		requests[i] = request
+	}
+
+	task := decodeTextFromRequestTask(client)
+	job := newJob(task, requests).withWorkers(15)
+	responses, errs, err := workerPoolDo(job)
+	if err != nil {
+		return
+	}
+
+	for i := range responses {
+		if errs[i] != nil {
+			slog.Error("Failed to fetch latest history", "url", requests[i].URL, "error", errs[i])
+			continue
+		}
+
+		truncated, _ := limitStringLength(responses[i], 2000)
+		widget.ChangeDetections[i].LatestHistory = truncated
+	}
 }
 
 func (widget *changeDetectionWidget) Render() template.HTML {
@@ -78,11 +115,13 @@ func (widget *changeDetectionWidget) Render() template.HTML {
 }
 
 type changeDetectionWatch struct {
-	Title        string
-	URL          string
-	LastChanged  time.Time
-	DiffURL      string
-	PreviousHash string
+	UUID          string
+	Title         string
+	URL           string
+	LastChanged   time.Time
+	DiffURL       string
+	PreviousHash  string
+	LatestHistory string
 }
 
 type changeDetectionWatchList []changeDetectionWatch
@@ -162,6 +201,7 @@ func fetchWatchesFromChangeDetection(client *http.Client, instanceURL string, re
 		watchJson := responses[i]
 
 		watch := changeDetectionWatch{
+			UUID:    requestedWatchIDs[i],
 			URL:     watchJson.URL,
 			DiffURL: fmt.Sprintf("%s/diff/%s?from_version=%d", instanceURL, requestedWatchIDs[i], watchJson.LastChanged-1),
 		}
