@@ -201,6 +201,13 @@ body {
     }
 }
 
+.widget-lazy-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 4rem;
+}
+
 .notice-icon {
     width: 0.7rem;
     height: 0.7rem;

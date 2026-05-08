@@ -18,6 +18,7 @@ export default function(container) {
     const lapsList = container.querySelector('[data-stopwatch-laps]');
     const iconPlay = toggleBtn.querySelector('.stopwatch-icon-play');
     const iconPause = toggleBtn.querySelector('.stopwatch-icon-pause');
+    const startOnOpen = container.dataset.stopwatchStartOnOpen === 'true';
 
     let startTime = null;
     let elapsed = 0;
@@ -84,4 +85,8 @@ export default function(container) {
     toggleBtn.addEventListener('click', toggle);
     resetBtn.addEventListener('click', reset);
     lapBtn.addEventListener('click', lap);
+
+    if (startOnOpen) {
+        toggle();
+    }
 }

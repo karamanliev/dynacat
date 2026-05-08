@@ -1,14 +1,11 @@
 name: Feature request
 description: Share your ideas for new features or improvements
+title: "[FEATURE] "
 labels: ["feature request"]
 body:
   - type: markdown
     attributes:
       value: |
-        > [!NOTE]
-        >
-        > Do not prefix your title with "[REQUEST]", "[Feature request]", etc., a label will be added automatically.
-
         Please provide a detailed description of what the feature would do and what it would look like:
 
         * What problem would this feature solve?

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"net/url"
 	"sync/atomic"
 	"time"
 
@@ -171,6 +172,7 @@ type widgetBase struct {
 	CustomCacheDuration durationField        `yaml:"cache"`
 	UpdateInterval      *updateIntervalField `yaml:"update-interval"`
 	ContentAvailable    bool                 `yaml:"-"`
+	LazyLoad            bool                 `yaml:"lazy-load"`
 	WIP                 bool                 `yaml:"-"`
 	Error               error                `yaml:"-"`
 	Notice              error                `yaml:"-"`
@@ -195,6 +197,11 @@ type widgetProviders struct {
 func (p *widgetProviders) SecureImageURL(ctx context.Context, imageURL string, allowInsecure bool) string {
 	if imageURL == "" {
 		return ""
+	}
+
+	parsedURL, err := url.Parse(imageURL)
+	if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || parsedURL.Host == "" {
+		return imageURL
 	}
 
 	hash := hashString(imageURL)
@@ -223,6 +230,10 @@ func (w *widgetBase) requiresUpdate(now *time.Time) bool {
 	}
 
 	if w.nextUpdate.IsZero() {
+		// Lazy widgets skip the initial blocking fetch; JS triggers it after page load
+		if w.LazyLoad {
+			return false
+		}
 		return true
 	}
 
@@ -231,6 +242,10 @@ func (w *widgetBase) requiresUpdate(now *time.Time) bool {
 
 func (w *widgetBase) IsWIP() bool {
 	return w.WIP
+}
+
+func (w *widgetBase) IsLazyLoad() bool {
+	return w.LazyLoad && !w.ContentAvailable
 }
 
 func (w *widgetBase) update(ctx context.Context) {

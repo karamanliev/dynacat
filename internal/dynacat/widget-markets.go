@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -21,15 +22,36 @@ type marketsWidget struct {
 	ChartLinkTemplate  string          `yaml:"chart-link-template"`
 	SymbolLinkTemplate string          `yaml:"symbol-link-template"`
 	Sort               string          `yaml:"sort-by"`
+	Proxy              string          `yaml:"proxy"`
 	Markets            marketList      `yaml:"-"`
+	httpClient         *http.Client    `yaml:"-"`
 }
 
 func (widget *marketsWidget) initialize() error {
 	widget.withTitle("Markets").withCacheDuration(time.Hour)
+	widget.LazyLoad = true
 
 	if widget.UpdateInterval == nil {
 		interval := updateIntervalField(10 * time.Minute)
 		widget.UpdateInterval = &interval
+	}
+
+	transport := &http.Transport{
+		MaxIdleConnsPerHost: 10,
+		Proxy:               http.ProxyFromEnvironment,
+	}
+
+	if widget.Proxy != "" {
+		proxyURL, err := url.Parse(widget.Proxy)
+		if err != nil {
+			return fmt.Errorf("invalid proxy URL: %w", err)
+		}
+		transport.Proxy = http.ProxyURL(proxyURL)
+	}
+
+	widget.httpClient = &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: transport,
 	}
 
 	// legacy support, remove in v0.10.0
@@ -53,7 +75,7 @@ func (widget *marketsWidget) initialize() error {
 }
 
 func (widget *marketsWidget) update(ctx context.Context) {
-	markets, err := fetchMarketsDataFromYahoo(widget.MarketRequests)
+	markets, err := fetchMarketsDataFromYahoo(widget.MarketRequests, widget.httpClient)
 
 	if !widget.canContinueUpdateAfterHandlingErr(err) {
 		return
@@ -73,10 +95,11 @@ func (widget *marketsWidget) Render() template.HTML {
 }
 
 type marketRequest struct {
-	CustomName string `yaml:"name"`
-	Symbol     string `yaml:"symbol"`
-	ChartLink  string `yaml:"chart-link"`
-	SymbolLink string `yaml:"symbol-link"`
+	CustomName   string `yaml:"name"`
+	Symbol       string `yaml:"symbol"`
+	ChartLink    string `yaml:"chart-link"`
+	SymbolLink   string `yaml:"symbol-link"`
+	InvertColors bool   `yaml:"invert-colors"`
 }
 
 type market struct {
@@ -126,7 +149,7 @@ type marketResponseJson struct {
 // TODO: allow changing chart time frame
 const marketChartDays = 21
 
-func fetchMarketsDataFromYahoo(marketRequests []marketRequest) (marketList, error) {
+func fetchMarketsDataFromYahoo(marketRequests []marketRequest, client *http.Client) (marketList, error) {
 	requests := make([]*http.Request, 0, len(marketRequests))
 
 	for i := range marketRequests {
@@ -135,7 +158,7 @@ func fetchMarketsDataFromYahoo(marketRequests []marketRequest) (marketList, erro
 		requests = append(requests, request)
 	}
 
-	job := newJob(decodeJsonFromRequestTask[marketResponseJson](defaultHTTPClient), requests)
+	job := newJob(decodeJsonFromRequestTask[marketResponseJson](client), requests)
 	responses, errs, err := workerPoolDo(job)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", errNoContent, err)
@@ -166,7 +189,10 @@ func fetchMarketsDataFromYahoo(marketRequests []marketRequest) (marketList, erro
 			prices = prices[len(prices)-marketChartDays:]
 		}
 
-		previous := result.Meta.RegularMarketPrice
+		previous := result.Meta.ChartPreviousClose
+		if previous == 0 {
+			previous = result.Meta.RegularMarketPrice
+		}
 
 		if len(prices) >= 2 && prices[len(prices)-2] != 0 {
 			previous = prices[len(prices)-2]

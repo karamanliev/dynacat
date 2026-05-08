@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -65,7 +66,7 @@ func (widget *customAPIWidget) initialize() error {
 		return errors.New("template is required")
 	}
 
-	compiledTemplate, err := template.New("").Funcs(customAPITemplateFuncs).Parse(widget.Template)
+	compiledTemplate, err := template.New("").Funcs(customAPITemplateFuncs(nil)).Parse(widget.Template)
 	if err != nil {
 		return fmt.Errorf("parsing template: %w", err)
 	}
@@ -95,7 +96,22 @@ func (widget *customAPIWidget) update(ctx context.Context) {
 	}
 
 	widget.Hidden = hidden
-	widget.CompiledHTML = compiledHTML
+	widget.CompiledHTML = rewriteImgSrcs(ctx, compiledHTML, widget.Providers)
+}
+
+func (widget *customAPIWidget) setProviders(providers *widgetProviders) {
+	widget.widgetBase.setProviders(providers)
+	if widget.Template == "" {
+		return
+	}
+
+	compiledTemplate, err := template.New("").Funcs(customAPITemplateFuncs(providers)).Parse(widget.Template)
+	if err != nil {
+		slog.Error("Failed to recompile custom API template", "error", err)
+		return
+	}
+
+	widget.compiledTemplate = compiledTemplate
 }
 
 func (widget *customAPIWidget) Render() template.HTML {
@@ -452,7 +468,7 @@ func customAPIDoMathOp[T int | float64](a, b T, op string) T {
 	return 0
 }
 
-var customAPITemplateFuncs = func() template.FuncMap {
+func customAPITemplateFuncs(providers *widgetProviders) template.FuncMap {
 	var regexpCacheMu sync.Mutex
 	var regexpCache = make(map[string]*regexp.Regexp)
 
@@ -492,6 +508,20 @@ var customAPITemplateFuncs = func() template.FuncMap {
 		default:
 			return math.NaN()
 		}
+	}
+
+	secureImageURL := func(rawURL string) string {
+		if providers == nil {
+			return rawURL
+		}
+		return providers.SecureImageURL(context.Background(), rawURL, false)
+	}
+
+	secureImageURLAllowInsecure := func(rawURL string) string {
+		if providers == nil {
+			return rawURL
+		}
+		return providers.SecureImageURL(context.Background(), rawURL, true)
 	}
 
 	funcs := template.FuncMap{
@@ -549,6 +579,8 @@ var customAPITemplateFuncs = func() template.FuncMap {
 			// Shorthand to do both of the above with a single function call
 			return dynamicRelativeTimeAttrs(customAPIFuncParseTimeInLocation(layout, value, time.UTC))
 		},
+		"secureImageURL":              secureImageURL,
+		"secureImageURLAllowInsecure": secureImageURLAllowInsecure,
 		"startOfDay": func(t time.Time) time.Time {
 			return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
 		},
@@ -701,6 +733,73 @@ var customAPITemplateFuncs = func() template.FuncMap {
 		"hide": func() template.HTML {
 			return template.HTML(customAPIHideWidgetSentinel)
 		},
+		// list creates a []any from the given arguments, enabling range iteration
+		// over dynamically constructed slices in templates.
+		"list": func(items ...any) []any {
+			return items
+		},
+		// append adds one or more items to a []any slice and returns the new slice.
+		"append": func(slice []any, items ...any) []any {
+			return append(slice, items...)
+		},
+		// uniq returns a new []any slice with duplicate values removed,
+		// preserving the order of first occurrence for all value types.
+		"uniq": func(slice []any) []any {
+			out := make([]any, 0, len(slice))
+			for _, candidate := range slice {
+				isDuplicate := false
+
+				for _, existing := range out {
+					if reflect.DeepEqual(existing, candidate) {
+						isDuplicate = true
+						break
+					}
+				}
+
+				if !isDuplicate {
+					out = append(out, candidate)
+				}
+			}
+
+			return out
+		},
+		// sortAlpha sorts a []any slice by each item's string representation
+		// in ascending order while preserving all items.
+		"sortAlpha": func(slice []any) []any {
+			type sortableItem struct {
+				value any
+				key   string
+			}
+
+			sortKey := func(value any) string {
+				if asString, ok := value.(string); ok {
+					return asString
+				}
+
+				// Prefer JSON for stable string output of maps/objects when possible.
+				if encoded, err := json.Marshal(value); err == nil {
+					return string(encoded)
+				}
+
+				return fmt.Sprint(value)
+			}
+
+			items := make([]sortableItem, len(slice))
+			for i, value := range slice {
+				items[i] = sortableItem{value: value, key: sortKey(value)}
+			}
+
+			sort.SliceStable(items, func(i, j int) bool {
+				return items[i].key < items[j].key
+			})
+
+			out := make([]any, len(items))
+			for i := range items {
+				out[i] = items[i].value
+			}
+
+			return out
+		},
 	}
 
 	for key, value := range globalTemplateFunctions {
@@ -710,7 +809,7 @@ var customAPITemplateFuncs = func() template.FuncMap {
 	}
 
 	return funcs
-}()
+}
 
 func customAPIFuncFormatTime(layout string, t time.Time) string {
 	switch strings.ToLower(layout) {

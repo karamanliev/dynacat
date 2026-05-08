@@ -136,7 +136,9 @@ function setupSearchBoxes() {
             let searchUrlTemplate;
 
             if (currentBang != null) {
-                query = input.slice(currentBang.dataset.shortcut.length + 1);
+                const shortcut = currentBang.dataset.shortcut;
+                const rawQuery = input.startsWith(shortcut) ? input.slice(shortcut.length) : input;
+                query = rawQuery.trim();
                 searchUrlTemplate = currentBang.dataset.url;
             } else {
                 query = input;
@@ -146,7 +148,10 @@ function setupSearchBoxes() {
                 return;
             }
 
-            const url = searchUrlTemplate.replace("!QUERY!", encodeURIComponent(query));
+            const encodedQuery = encodeURIComponent(query);
+            const url = searchUrlTemplate
+                .replace("!QUERY!", encodedQuery)
+                .replace("{QUERY}", encodedQuery);
 
             if (openInNewTab) {
                 window.open(url, target).focus();
@@ -165,6 +170,9 @@ function setupSearchBoxes() {
             }
 
             if (event.key == "Enter") {
+                // Prevent the form submit event from firing a second search after
+                // keydown already handled submission.
+                event.preventDefault();
                 const openInNewTab = newTab && !event.ctrlKey || !newTab && event.ctrlKey;
                 submitSearch(openInNewTab);
                 return;
@@ -526,6 +534,8 @@ function setupDynamicRelativeTime() {
     });
 }
 
+const _initializedGroupHeaders = new WeakSet();
+
 function setupGroups() {
     const groups = document.getElementsByClassName("widget-type-group");
 
@@ -536,10 +546,11 @@ function setupGroups() {
     for (let g = 0; g < groups.length; g++) {
         const group = groups[g];
 
-        if (group.dataset.initialized) continue;
-        group.dataset.initialized = "true";
+        const headerEl = group.getElementsByClassName("widget-header")[0];
+        if (!headerEl || _initializedGroupHeaders.has(headerEl)) continue;
+        _initializedGroupHeaders.add(headerEl);
 
-        const titles = group.getElementsByClassName("widget-header")[0].children;
+        const titles = headerEl.children;
         const tabs = group.getElementsByClassName("widget-group-contents")[0].children;
         let current = 0;
 
@@ -589,6 +600,18 @@ function setupGroups() {
             });
         }
     }
+}
+
+function setupImageFallbacks() {
+    document.querySelectorAll("img[data-fallback-src]:not([loading=lazy])").forEach(img => {
+        img.addEventListener("error", function handler() {
+            img.removeEventListener("error", handler);
+            const fallback = img.dataset.fallbackSrc;
+            if (fallback && img.src !== fallback) {
+                img.src = fallback;
+            }
+        });
+    });
 }
 
 function setupLazyImages() {
@@ -1410,6 +1433,7 @@ async function setupPage() {
         setupGroups();
         setupMasonries();
         setupDynamicRelativeTime();
+        setupImageFallbacks();
         setupLazyImages();
         setupPlayingProgressUpdater();
     } finally {
@@ -1509,6 +1533,7 @@ async function updateWidget(widgetElement) {
             setupGroups();
             setupMasonries();
             setupDynamicRelativeTime();
+            setupImageFallbacks();
             setupLazyImages();
             setupTruncatedElementTitles();
 
@@ -1948,6 +1973,7 @@ async function applyContentUpdate() {
         setupCollapsibleGrids();
         setupGroups();
         setupMasonries();
+        setupImageFallbacks();
         setupLazyImages();
         setupTruncatedElementTitles();
         setupPlayingThumbnailCropping();
@@ -2115,6 +2141,7 @@ function _runPostSettleSetup() {
     setupGroups();
     setupMasonries();
     setupDynamicRelativeTime();
+    setupImageFallbacks();
     setupLazyImages();
     setupTruncatedElementTitles();
     setupPlayingProgressUpdater();
@@ -2163,7 +2190,14 @@ window.addEventListener('beforeunload', _closeSSE);
 
 window.dynacatSetupPopovers = setupPopovers;
 
+function fetchLazyWidgets() {
+    document.querySelectorAll('.widget[data-lazy-load]').forEach(widget => {
+        updateWidget(widget);
+    });
+}
+
 setupPage().then(() => {
     startPolling();
     setupWidgetPolling();
+    fetchLazyWidgets();
 });
