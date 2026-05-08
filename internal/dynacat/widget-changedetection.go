@@ -23,6 +23,7 @@ type changeDetectionWidget struct {
 	Limit            int                      `yaml:"limit"`
 	CollapseAfter    int                      `yaml:"collapse-after"`
 	LastHistoryTooltip bool                   `yaml:"last-history-tooltip"`
+	ShowPaused         *bool                  `yaml:"show-paused"`
 }
 
 func (widget *changeDetectionWidget) initialize() error {
@@ -43,6 +44,11 @@ func (widget *changeDetectionWidget) initialize() error {
 
 	if widget.InstanceURL == "" {
 		widget.InstanceURL = "https://www.changedetection.io"
+	}
+
+	if widget.ShowPaused == nil {
+		t := true
+		widget.ShowPaused = &t
 	}
 
 	return nil
@@ -69,6 +75,10 @@ func (widget *changeDetectionWidget) update(ctx context.Context) {
 
 	if len(watches) > widget.Limit {
 		watches = watches[:widget.Limit]
+	}
+
+	if !*widget.ShowPaused {
+		watches = watches.filterPaused()
 	}
 
 	widget.ChangeDetections = watches
@@ -122,6 +132,7 @@ type changeDetectionWatch struct {
 	DiffURL       string
 	PreviousHash  string
 	LatestHistory string
+	Paused        bool
 }
 
 type changeDetectionWatchList []changeDetectionWatch
@@ -134,12 +145,23 @@ func (r changeDetectionWatchList) sortByNewest() changeDetectionWatchList {
 	return r
 }
 
+func (r changeDetectionWatchList) filterPaused() changeDetectionWatchList {
+	filtered := make(changeDetectionWatchList, 0, len(r))
+	for _, w := range r {
+		if !w.Paused {
+			filtered = append(filtered, w)
+		}
+	}
+	return filtered
+}
+
 type changeDetectionResponseJson struct {
 	Title        string `json:"title"`
 	URL          string `json:"url"`
 	LastChanged  int64  `json:"last_changed"`
 	DateCreated  int64  `json:"date_created"`
 	PreviousHash string `json:"previous_md5"`
+	Paused       bool   `json:"paused"`
 }
 
 func fetchWatchUUIDsFromChangeDetection(client *http.Client, instanceURL string, token string) ([]string, error) {
@@ -227,6 +249,8 @@ func fetchWatchesFromChangeDetection(client *http.Client, instanceURL string, re
 
 			watch.PreviousHash = watchJson.PreviousHash[0:hashLength]
 		}
+
+		watch.Paused = watchJson.Paused
 
 		watches = append(watches, watch)
 	}
